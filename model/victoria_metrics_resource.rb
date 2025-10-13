@@ -20,7 +20,7 @@ class VictoriaMetricsResource < Sequel::Model
       break if (vmr = VictoriaMetricsResource.first(project_id:))
     end
 
-    vmr&.servers&.first&.client || (VictoriaMetrics::Client.new(endpoint: "http://localhost:8428") if Config.development?)
+    vmr&.servers&.first&.client || (VictoriaMetrics::Client.new(endpoint: ENV["VICTORIA_METRICS_URL"] || "http://localhost:8428") if Config.development?)
   end
 
   def hostname
