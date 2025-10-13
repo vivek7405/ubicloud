@@ -240,8 +240,9 @@ RSpec.describe Prog::Vm::Nexus do
     end
 
     it "hops to wait_aws_vm_started if vm nics are in wait state" do
+      expect(nx).to receive(:frame).and_return("alternative_families" => ["m7i", "m6a"])
       expect(nx).to receive(:vm).and_return(instance_double(Vm, id: "vm_id", nics: [instance_double(Nic, strand: instance_double(Strand, label: "wait"))])).at_least(:once)
-      expect(nx).to receive(:bud).with(Prog::Aws::Instance, {"subject_id" => "vm_id"}, :start)
+      expect(nx).to receive(:bud).with(Prog::Aws::Instance, {"subject_id" => "vm_id", "alternative_families" => ["m7i", "m6a"]}, :start)
       expect { nx.start_aws }.to hop("wait_aws_vm_started")
     end
   end
@@ -299,7 +300,7 @@ RSpec.describe Prog::Vm::Nexus do
         vm.ephemeral_net6 = "fe80::/64"
         vm.unix_user = "test_user"
         vm.public_key = "test_ssh_key"
-        vm.local_vetho_ip = "169.254.0.0"
+        vm.local_vetho_ip = NetAddr::IPv4Net.parse("169.254.0.0/32")
         ps = instance_double(PrivateSubnet, location_id: Location::HETZNER_FSN1_ID, net4: NetAddr::IPv4Net.parse("10.0.0.0/26"), random_private_ipv6: "fd10:9b0b:6b4b:8fbb::/64")
         nic = Nic.new(private_ipv6: "fd10:9b0b:6b4b:8fbb::/64", private_ipv4: "10.0.0.3/32", mac: "5a:0f:75:80:c3:64")
         pci = PciDevice.new(slot: "01:00.0", iommu_group: 23)
@@ -329,7 +330,7 @@ RSpec.describe Prog::Vm::Nexus do
             "max_vcpus" => 2,
             "cpu_topology" => "2:1:1:1",
             "mem_gib" => 8,
-            "local_ipv4" => "169.254.0.0",
+            "local_ipv4" => "169.254.0.0/32",
             "nics" => [["fd10:9b0b:6b4b:8fbb::/64", "10.0.0.3/32", "tap4ncdd56m", "5a:0f:75:80:c3:64", "10.0.0.1/26"]],
             "swap_size_bytes" => nil,
             "pci_devices" => [["01:00.0", 23]],
@@ -619,6 +620,27 @@ RSpec.describe Prog::Vm::Nexus do
       expect { nx.start }.to hop("create_unix_user")
     end
 
+    it "uses standard-gpu family even if premium enabled" do
+      vm.location_id = Location::GITHUB_RUNNERS_ID
+      vm.family = "standard-gpu"
+      installation = GithubInstallation.create(name: "ubicloud", type: "Organization", installation_id: 123, project_id: prj.id, allocator_preferences: {"family_filter" => ["standard", "premium"]})
+      GithubRunner.create(label: "ubicloud-gpu", repository_name: "ubicloud/test", installation_id: installation.id, vm_id: vm.id)
+
+      expect(Scheduling::Allocator).to receive(:allocate).with(
+        vm, :storage_volumes,
+        allocation_state_filter: ["accepting"],
+        distinct_storage_devices: false,
+        host_filter: [],
+        host_exclusion_filter: [],
+        location_filter: [Location::GITHUB_RUNNERS_ID, Location::HETZNER_FSN1_ID, Location::HETZNER_HEL1_ID],
+        location_preference: [Location::GITHUB_RUNNERS_ID],
+        gpu_count: 0,
+        gpu_device: nil,
+        family_filter: ["standard-gpu"]
+      )
+      expect { nx.start }.to hop("create_unix_user")
+    end
+
     it "can force allocating a host" do
       allow(nx).to receive(:frame).and_return({
         "force_host_id" => :vm_host_id,
@@ -733,7 +755,7 @@ RSpec.describe Prog::Vm::Nexus do
     end
 
     it "naps if not sshable" do
-      expect(vm).to receive(:ephemeral_net4).and_return("10.0.0.1")
+      expect(vm).to receive(:ip4).and_return(NetAddr::IPv4.parse("10.0.0.1"))
       expect(vm).to receive(:update_firewall_rules_set?).and_return(true)
       expect(vm).not_to receive(:incr_update_firewall_rules)
       expect(Socket).to receive(:tcp).with("10.0.0.1", 22, connect_timeout: 1).and_raise Errno::ECONNREFUSED
@@ -751,7 +773,7 @@ RSpec.describe Prog::Vm::Nexus do
 
     it "skips a check if ipv4 is not enabled" do
       expect(vm).to receive(:update_firewall_rules_set?).and_return(true)
-      expect(vm.ephemeral_net4).to be_nil
+      expect(vm.ip4).to be_nil
       expect(vm).not_to receive(:ephemeral_net6)
       expect { nx.wait_sshable }.to hop("create_billing_record")
     end

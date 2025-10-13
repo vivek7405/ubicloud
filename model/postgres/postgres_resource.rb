@@ -60,7 +60,7 @@ class PostgresResource < Sequel::Model
       return "#{name}.#{hostname_suffix}" if hostname_version == "v1"
       "#{name}.#{ubid}.#{hostname_suffix}"
     else
-      representative_server&.vm&.ephemeral_net4&.to_s
+      representative_server&.vm&.ip4_string
     end
   end
 
@@ -92,6 +92,10 @@ class PostgresResource < Sequel::Model
     URI::Generic.build2(scheme: "postgres", userinfo: "ubi_replication", host: identity, query: query_parameters).to_s
   end
 
+  def version
+    representative_server&.version || target_version
+  end
+
   def target_standby_count
     Option::POSTGRES_HA_OPTIONS[ha_type].standby_count
   end
@@ -101,15 +105,24 @@ class PostgresResource < Sequel::Model
   end
 
   def has_enough_fresh_servers?
-    servers.count { !it.needs_recycling? } >= target_server_count
+    if version.to_i < target_version.to_i
+      !upgrade_candidate_server.nil?
+    else
+      servers.count { !it.needs_recycling? } >= target_server_count
+    end
   end
 
   def has_enough_ready_servers?
-    servers.count { !it.needs_recycling? && it.strand.label == "wait" } >= target_server_count
+    if version.to_i < target_version.to_i
+      upgrade_candidate_server&.strand&.label == "wait"
+    else
+      servers.count { !it.needs_recycling? && it.strand.label == "wait" } >= target_server_count
+    end
   end
 
   def needs_convergence?
-    servers.any? { it.needs_recycling? } || servers.count != target_server_count
+    needs_upgrade = version.to_i < target_version.to_i && !ongoing_failover?
+    servers.any? { it.needs_recycling? } || servers.count != target_server_count || needs_upgrade
   end
 
   def in_maintenance_window?
@@ -149,6 +162,37 @@ class PostgresResource < Sequel::Model
     Semaphore.incr(servers_dataset.select(:id), "restart")
   end
 
+  def upgrade_candidate_server
+    if location.aws?
+      # TODO: We check if the AWS server is running the latest AMI version tracked in
+      # the pg_aws_ami table. We can optimize this to consider more AMIs by tracking
+      # the creation times in the pg_aws_ami table.
+      servers
+        .reject(&:representative_at)
+        .select { |server| PgAwsAmi.where(aws_ami_id: server.vm.boot_image).count > 0 }
+        .max_by(&:created_at)
+    else
+      servers
+        .reject(&:representative_at)
+        .select { |server| server.vm.vm_storage_volumes.filter { it.boot }.any? { it.boot_image.version >= UPGRADE_IMAGE_MIN_VERSIONS[target_version] } }
+        .max_by(&:created_at)
+    end
+  end
+
+  def upgrade_stage
+    strand.children_dataset.where(prog: "Postgres::ConvergePostgresResource").first&.label
+  end
+
+  def upgrade_status
+    if upgrade_stage == "upgrade_failed"
+      "failed"
+    elsif target_version != version
+      "running"
+    else
+      "not_running"
+    end
+  end
+
   module HaType
     NONE = "none"
     ASYNC = "async"
@@ -162,8 +206,13 @@ class PostgresResource < Sequel::Model
   end
 
   DEFAULT_VERSION = "17"
+  LATEST_VERSION = "17"
 
   MAINTENANCE_DURATION_IN_HOURS = 2
+
+  UPGRADE_IMAGE_MIN_VERSIONS = {
+    "17" => "20240801"
+  }
 end
 
 # Table: postgres_resource
@@ -189,12 +238,12 @@ end
 #  hostname_version            | hostname_version         | NOT NULL DEFAULT 'v1'::hostname_version
 #  private_subnet_id           | uuid                     |
 #  flavor                      | postgres_flavor          | NOT NULL DEFAULT 'standard'::postgres_flavor
-#  version                     | postgres_version         | NOT NULL DEFAULT '16'::postgres_version
 #  location_id                 | uuid                     | NOT NULL
 #  maintenance_window_start_at | integer                  |
 #  user_config                 | jsonb                    | NOT NULL DEFAULT '{}'::jsonb
 #  pgbouncer_user_config       | jsonb                    | NOT NULL DEFAULT '{}'::jsonb
 #  tags                        | jsonb                    | NOT NULL DEFAULT '[]'::jsonb
+#  target_version              | postgres_version         | NOT NULL
 # Indexes:
 #  postgres_server_pkey                               | PRIMARY KEY btree (id)
 #  postgres_resource_project_id_location_id_name_uidx | UNIQUE btree (project_id, location_id, name)

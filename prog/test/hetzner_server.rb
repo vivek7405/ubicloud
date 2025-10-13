@@ -66,7 +66,9 @@ class Prog::Test::HetznerServer < Prog::Test::Base
       frame["hostname"],
       provider_name: HostProvider::HETZNER_PROVIDER_NAME,
       server_identifier: frame["server_id"],
-      default_boot_images: frame["default_boot_images"]
+      default_boot_images: frame["default_boot_images"],
+      spdk_version: nil,
+      vhost_block_backend_version: Config.vhost_block_backend_version
     ).subject
     update_stack({"vm_host_id" => vm_host.id})
 
@@ -78,7 +80,12 @@ class Prog::Test::HetznerServer < Prog::Test::Base
       Clog.emit(vm_host.sshable.cmd("ls -lah /var/storage/images").strip.tr("\n", "\t")) if vm_host.strand.label == "wait_download_boot_images"
       nap 15
     end
+    update_stack({"available_storage_gib" => vm_host.available_storage_gib})
 
+    hop_install_integration_specs
+  end
+
+  label def install_integration_specs
     if retval&.dig("msg") == "installed rhizome"
       verify_specs_installation(installed: true)
 
@@ -102,19 +109,10 @@ class Prog::Test::HetznerServer < Prog::Test::Base
     tmp_dir = "/var/storage/tests"
     vm_host.sshable.cmd("sudo mkdir -p #{tmp_dir}")
     vm_host.sshable.cmd("sudo chmod a+rw #{tmp_dir}")
-    vm_host.sshable.cmd("sudo RUN_E2E_TESTS=1 SPDK_TESTS_TMP_DIR=#{tmp_dir} bundle exec rspec host/e2e")
+    vm_host.sshable.cmd("sudo RUN_E2E_TESTS=1 bundle exec rspec host/e2e")
     vm_host.sshable.cmd("sudo rm -rf #{tmp_dir}")
 
-    hop_install_vhost_backend
-  end
-
-  label def install_vhost_backend
-    hop_wait if retval&.dig("msg") == "VhostBlockBackend was setup"
-    push Prog::Storage::SetupVhostBlockBackend, {
-      "subject_id" => vm_host.id,
-      "version" => Config.vhost_block_backend_version,
-      "allocation_weight" => 100
-    }
+    hop_wait
   end
 
   label def wait
@@ -159,21 +157,13 @@ class Prog::Test::HetznerServer < Prog::Test::Base
 
     vhost_dir_content = sshable.cmd("sudo ls -1 /var/storage/vhost").split("\n")
     fail_test "vhost directory not empty: #{vhost_dir_content}" unless vhost_dir_content.empty?
-    hop_verify_spdk_artifacts_purged
+    hop_verify_resources_reclaimed
   end
 
-  label def verify_spdk_artifacts_purged
-    sshable = vm_host.sshable
-
-    spdk_version = vm_host.spdk_installations.first.version
-    rpc_py = "/opt/spdk-#{spdk_version}/scripts/rpc.py"
-    rpc_sock = "/home/spdk/spdk-#{spdk_version}.sock"
-
-    bdevs = JSON.parse(sshable.cmd("sudo #{rpc_py} -s #{rpc_sock} bdev_get_bdevs")).map { it["name"] }
-    fail_test "SPDK bdevs not empty: #{bdevs}" unless bdevs.empty?
-
-    vhost_controllers = JSON.parse(sshable.cmd("sudo #{rpc_py} -s #{rpc_sock} vhost_get_controllers")).map { it["ctrlr"] }
-    fail_test "SPDK vhost controllers not empty: #{vhost_controllers}" unless vhost_controllers.empty?
+  label def verify_resources_reclaimed
+    fail_test "used_cores is expected to be zero, actual: #{vm_host.used_cores}" unless vm_host.used_cores.zero?
+    fail_test "used_hugepages_1g is expected to be zero, actual: #{vm_host.used_hugepages_1g}" unless vm_host.used_hugepages_1g.zero?
+    fail_test "available_storage_gib was not reclaimed as expected: #{frame["available_storage_gib"]}, actual: #{vm_host.available_storage_gib}" unless frame["available_storage_gib"] == vm_host.available_storage_gib
 
     hop_destroy
   end

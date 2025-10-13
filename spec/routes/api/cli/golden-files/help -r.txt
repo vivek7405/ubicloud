@@ -288,16 +288,18 @@ Usage:
     ubi lb (location/lb-name | lb-id) post-command [...]
 
 Commands:
-    list         List load balancers
+    list                       List load balancers
 
 Post Commands:
-    attach-vm    Attach a virtual machine to a load balancer
-    create       Create a load balancer
-    destroy      Destroy a load balancer
-    detach-vm    Detach a virtual machine from a load balancer
-    rename       Rename a load balancer
-    show         Show details for a load balancer
-    update       Update a load balancer
+    attach-vm                  Attach a virtual machine to a load balancer
+    create                     Create a load balancer
+    destroy                    Destroy a load balancer
+    detach-vm                  Detach a virtual machine from a load balancer
+    disable-ssl-certificate    Disable the SSL certificate for a load balancer
+    enable-ssl-certificate     Enable the SSL certificate for a load balancer
+    rename                     Rename a load balancer
+    show                       Show details for a load balancer
+    update                     Update a load balancer
 
 
 List load balancers
@@ -330,6 +332,7 @@ Options:
     -e, --check-endpoint=path        set the health check endpoint (default: /up)
     -p, --check-protocol=proto       set the health check protocol
     -s, --stack=stack                set the stack
+    -c, --cert-enabled=bool          SSL certificate enabled
 
 Allowed Option Values:
     Algorithm: round_robin hash_based
@@ -352,6 +355,18 @@ Usage:
     ubi lb (location/lb-name | lb-id) detach-vm (vm-name | vm-id)
 
 
+Disable the SSL certificate for a load balancer
+
+Usage:
+    ubi lb (location/lb-name | lb-id) disable-ssl-certificate
+
+
+Enable the SSL certificate for a load balancer
+
+Usage:
+    ubi lb (location/lb-name | lb-id) enable-ssl-certificate
+
+
 Rename a load balancer
 
 Usage:
@@ -369,13 +384,13 @@ Options:
 Allowed Option Values:
     Fields: id name state location hostname algorithm stack
             health-check-endpoint health-check-protocol src-port dst-port subnet
-            vms
+            vms cert-enabled
 
 
 Update a load balancer
 
 Usage:
-    ubi lb (location/lb-name | lb-id) update algorithm src-port dst-port health-check-endpoint [(vm-name | vm-id) [...]]
+    ubi lb (location/lb-name | lb-id) update algorithm src-port dst-port health-check-endpoint cert-enabled [(vm-name | vm-id) [...]]
 
 
 Manage PostgreSQL databases
@@ -414,6 +429,8 @@ Post Commands:
     show                               Show details for a PostgreSQL database
     show-config                        Show configuration for a PostgreSQL database
     show-pgbouncer-config              Show pgbouncer configuration for a PostgreSQL database
+    show-upgrade-status                Show the status of a major version upgrade of the PostgreSQL database
+    upgrade                            Schedule a major version upgrade of the PostgreSQL database
 
 Post Options:
     -d, --dbname=name                override database name
@@ -640,6 +657,12 @@ Usage:
     ubi pg (location/pg-name | pg-id) show-pgbouncer-config
 
 
+Show the status of a major version upgrade of the PostgreSQL database
+
+Usage:
+    ubi pg (location/pg-name | pg-id) show-upgrade-status
+
+
 Show details for a PostgreSQL database
 
 Usage:
@@ -650,10 +673,16 @@ Options:
 
 Allowed Option Values:
     Fields: id name state location vm-size target-vm-size storage-size-gib
-            target-storage-size-gib version ha-type flavor connection-string
-            primary earliest-restore-time maintenance-window-start-at
-            read-replica parent tags firewall-rules metric-destinations
-            read-replicas ca-certificates
+            target-storage-size-gib version target-version ha-type flavor
+            connection-string primary earliest-restore-time
+            maintenance-window-start-at read-replica parent tags firewall-rules
+            metric-destinations read-replicas ca-certificates
+
+
+Schedule a major version upgrade of the PostgreSQL database
+
+Usage:
+    ubi pg (location/pg-name | pg-id) upgrade
 
 
 Manage private subnets
@@ -762,7 +791,7 @@ Post Commands:
 List SSH public keys
 
 Usage:
-    ubi sk (sk-name | sk-id) list [options]
+    ubi sk list [options]
 
 Options:
     -N, --no-headers                 do not show headers
@@ -872,7 +901,7 @@ Options:
     -u, --unix-user=username         username (default: ubi)
 
 Allowed Option Values:
-    Boot Image: ubuntu-noble ubuntu-jammy debian-12 almalinux-9
+    Boot Image: gpu-ubuntu-noble ubuntu-noble ubuntu-jammy debian-12 almalinux-9
     Size: standard-2 standard-4 standard-8 standard-16 standard-30 standard-60
           burstable-1 burstable-2
     Storage Size: 10 20 40 80 160 320 600 640 1200 2400

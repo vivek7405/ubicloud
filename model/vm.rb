@@ -55,16 +55,20 @@ class Vm < Sequel::Model
     "/location/#{display_location}/vm/#{name}"
   end
 
-  def ephemeral_net4
-    assigned_vm_address&.ip&.network
+  def ip4
+    ephemeral_net4&.nth(0)
   end
 
-  def ip4
-    assigned_vm_address&.ip
+  def ip4_string
+    ip4&.to_s
   end
 
   def ip6
     location.aws? ? ephemeral_net6&.nth(0) : ephemeral_net6&.nth(2)
+  end
+
+  def ip6_string
+    ip6&.to_s
   end
 
   def nic
@@ -222,7 +226,7 @@ class Vm < Sequel::Model
     JSON.pretty_generate(
       vm_name: name,
       public_ipv6: project.get_ff_ipv6_disabled ? nic.private_subnet.random_private_ipv6.to_s : ephemeral_net6.to_s,
-      public_ipv4: ip4.to_s || "",
+      public_ipv4: ip4.to_s,
       local_ipv4: local_vetho_ip.to_s.shellescape || "",
       dns_ipv4: nic.private_subnet.net4.nth(2).to_s,
       unix_user:,
@@ -281,6 +285,12 @@ class Vm < Sequel::Model
   end
 
   include Validation::PublicKeyValidation
+
+  private
+
+  def ephemeral_net4
+    assigned_vm_address&.ip
+  end
 end
 
 # Table: vm
@@ -293,7 +303,7 @@ end
 #  display_state           | vm_display_state         | NOT NULL DEFAULT 'creating'::vm_display_state
 #  name                    | text                     | NOT NULL
 #  boot_image              | text                     | NOT NULL
-#  local_vetho_ip          | text                     |
+#  local_vetho_ip          | cidr                     |
 #  ip4_enabled             | boolean                  | NOT NULL DEFAULT false
 #  family                  | text                     | NOT NULL
 #  cores                   | integer                  | NOT NULL

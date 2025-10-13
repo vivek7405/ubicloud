@@ -18,7 +18,7 @@ RSpec.describe Prog::Vm::HostNexus do
 
   let(:vms) { [instance_double(Vm, memory_gib: 1), instance_double(Vm, memory_gib: 2)] }
   let(:spdk_installations) { [instance_double(SpdkInstallation, cpu_count: 4, hugepages: 4)] }
-  let(:vm_host_slices) { [instance_double(VmHostSlice, name: "standard1"), instance_double(VmHostSlice, name: "standard2")] }
+  let(:vm_host_slices) { [instance_double(VmHostSlice, name: "standard1", total_memory_gib: 2), instance_double(VmHostSlice, name: "standard2", total_memory_gib: 3)] }
   let(:vm_host) { instance_double(VmHost, spdk_installations: spdk_installations, vms: vms, slices: vm_host_slices, id: "1d422893-2955-4c2c-b41c-f2ec70bcd60d", spdk_cpu_count: 2) }
   let(:sshable) { instance_double(Sshable, raw_private_key_1: "bogus") }
 
@@ -69,6 +69,20 @@ RSpec.describe Prog::Vm::HostNexus do
       expect(Hosting::Apis).not_to receive(:set_server_name)
 
       described_class.assemble("127.0.0.1", provider_name: HostProvider::HETZNER_PROVIDER_NAME, server_identifier: "1")
+    end
+
+    it "checks whether both spdk and vhost_block_backend version is set" do
+      expect { described_class.assemble("127.0.0.1", vhost_block_backend_version: "someversion") }.to raise_error("SPDK and VhostBlockBackend cannot be set simultaneously")
+    end
+
+    it "checks that both spdk and vhost_block_backend version is set although one is nil" do
+      st = described_class.assemble("127.0.0.1", spdk_version: nil, vhost_block_backend_version: "someversion")
+      expect(st.stack.first["spdk_version"]).to be_nil
+      expect(st.stack.first["vhost_block_backend_version"]).to eq("someversion")
+
+      st = described_class.assemble("1.2.3.4")
+      expect(st.stack.first["spdk_version"]).to eq(Config.spdk_version)
+      expect(st.stack.first["vhost_block_backend_version"]).to be_nil
     end
   end
 
@@ -251,19 +265,29 @@ RSpec.describe Prog::Vm::HostNexus do
 
     it "hops once SetupHugepages has returned" do
       nx.strand.retval = {"msg" => "hugepages installed"}
-      expect { nx.setup_hugepages }.to hop("setup_spdk")
+      expect { nx.setup_hugepages }.to hop("setup_storage_backend")
     end
   end
 
-  describe "#setup_spdk" do
-    it "pushes the spdk program" do
+  describe "#setup_storage_backend" do
+    it "pushes the spdk program by default" do
       expect(nx).to receive(:push).with(Prog::Storage::SetupSpdk,
         {
           "version" => Config.spdk_version,
           "start_service" => false,
           "allocation_weight" => 100
         }).and_call_original
-      expect { nx.setup_spdk }.to hop("start", "Storage::SetupSpdk")
+      expect { nx.setup_storage_backend }.to hop("start", "Storage::SetupSpdk")
+    end
+
+    it "pushes the vhost_block_backend program when spdk is not set and vhost_block_backend is set" do
+      nx = described_class.new(described_class.assemble("1.2.3.4", spdk_version: nil, vhost_block_backend_version: "someversion"))
+      expect(nx).to receive(:push).with(Prog::Storage::SetupVhostBlockBackend,
+        {
+          "version" => "someversion",
+          "allocation_weight" => 100
+        }).and_call_original
+      expect { nx.setup_storage_backend }.to hop("start", "Storage::SetupVhostBlockBackend")
     end
 
     it "hops once SetupSpdk has returned" do
@@ -277,7 +301,12 @@ RSpec.describe Prog::Vm::HostNexus do
       )
       allow(nx).to receive(:vm_host).and_return(vmh)
       expect(vmh).to receive(:update).with({used_cores: 2})
-      expect { nx.setup_spdk }.to hop("download_boot_images")
+      expect { nx.setup_storage_backend }.to hop("download_boot_images")
+    end
+
+    it "hops once SetupVhostBlockBackend has returned" do
+      nx.strand.retval = {"msg" => "VhostBlockBackend was setup"}
+      expect { nx.setup_storage_backend }.to hop("download_boot_images")
     end
   end
 
@@ -455,6 +484,16 @@ RSpec.describe Prog::Vm::HostNexus do
       expect { nx.reboot }.to hop("verify_spdk")
     end
 
+    it "reboot updates last_boot_id and hops to verify_hugepages when spdk is not instaled" do
+      expect(nx).to receive(:frame).and_return({"spdk_version" => nil, "vhost_block_backend_version" => "version"}).at_least(:once)
+      expect(sshable).to receive(:available?).and_return(true)
+      expect(vm_host).to receive(:last_boot_id).and_return("xyz")
+      expect(sshable).to receive(:cmd).with("sudo host/bin/reboot-host xyz").and_return "pqr\n"
+      expect(vm_host).to receive(:update).with(last_boot_id: "pqr")
+
+      expect { nx.reboot }.to hop("verify_hugepages")
+    end
+
     it "verify_spdk hops to verify_hugepages if spdk started" do
       expect(vm_host).to receive(:spdk_installations).and_return([
         SpdkInstallation.new(version: "v1.0"),
@@ -567,6 +606,7 @@ RSpec.describe Prog::Vm::HostNexus do
     it "fails if not enough hugepages for VMs" do
       expect(sshable).to receive(:cmd).with("cat /proc/meminfo")
         .and_return("Hugepagesize: 1048576 kB\nHugePages_Total: 5\nHugePages_Free: 2")
+      expect(vm_host).to receive(:accepts_slices).and_return(false)
       expect { nx.verify_hugepages }.to raise_error RuntimeError, "Not enough hugepages for VMs"
     end
 
@@ -576,11 +616,21 @@ RSpec.describe Prog::Vm::HostNexus do
       expect { nx.verify_hugepages }.to raise_error RuntimeError, "Used hugepages exceed SPDK hugepages"
     end
 
+    it "calculates used memory for slices and hops" do
+      expect(sshable).to receive(:cmd).with("cat /proc/meminfo")
+        .and_return("Hugepagesize: 1048576 kB\nHugePages_Total: 10\nHugePages_Free: 8")
+      expect(vm_host).to receive(:update)
+        .with(total_hugepages_1g: 10, used_hugepages_1g: 9)
+      expect(vm_host).to receive(:accepts_slices).and_return(true)
+      expect { nx.verify_hugepages }.to hop("start_slices")
+    end
+
     it "updates vm_host with hugepage stats and hops" do
       expect(sshable).to receive(:cmd).with("cat /proc/meminfo")
         .and_return("Hugepagesize: 1048576 kB\nHugePages_Total: 10\nHugePages_Free: 8")
       expect(vm_host).to receive(:update)
         .with(total_hugepages_1g: 10, used_hugepages_1g: 7)
+      expect(vm_host).to receive(:accepts_slices).and_return(false)
       expect { nx.verify_hugepages }.to hop("start_slices")
     end
   end

@@ -11,7 +11,7 @@ RSpec.describe Clover, "vm" do
 
   let(:vm) do
     vm = Prog::Vm::Nexus.assemble("dummy-public key", project.id, name: "dummy-vm-1").subject
-    vm.update(ephemeral_net6: "2a01:4f8:173:1ed3:aa7c::/79")
+    vm.update(ephemeral_net6: NetAddr::IPv6Net.parse("2a01:4f8:173:1ed3:aa7c::/79"))
     vm.reload # without reload ephemeral_net6 is string and can't call .network
   end
 
@@ -121,7 +121,7 @@ RSpec.describe Clover, "vm" do
       end
 
       it "shows vm create page with burstable and location_latitude_fra" do
-        project.set_ff_location_latitude_fra true
+        project.set_ff_visible_locations ["latitude-fra"]
         visit "#{project.path}/vm/create"
         expect(page.title).to eq("Ubicloud - Create Virtual Machine")
       end
@@ -419,6 +419,31 @@ RSpec.describe Clover, "vm" do
         expect(page).to have_no_content "GPU"
         expect(page).to have_content "Finland"
         expect(page).to have_content "Burstable"
+      end
+
+      it "shows invisible locations if feature flag is enabled" do
+        project
+        project.set_ff_gpu_vm(true)
+        project.set_ff_visible_locations(["latitude-ai"])
+        vmh = Prog::Vm::HostNexus.assemble("::1", location_id: Location[name: "latitude-ai"].id).subject
+        pci = PciDevice.new_with_id(
+          vm_host_id: vmh.id,
+          slot: "01:00.0",
+          device_class: "0300",
+          vendor: "10de",
+          device: "20b5",
+          numa_node: nil,
+          iommu_group: 0
+        )
+        vmh.save_changes
+        pci.save_changes
+
+        visit "#{project.path}/vm"
+        click_link "Create GPU Virtual Machine"
+
+        expect(page.title).to eq("Ubicloud - Create GPU Virtual Machine")
+        expect(page).to have_content "GPU"
+        expect(page).to have_content "latitude-ai"
       end
 
       it "cannot create a virtual machine with gpu if feature switch is disabled" do

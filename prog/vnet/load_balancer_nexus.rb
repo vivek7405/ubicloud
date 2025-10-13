@@ -11,7 +11,7 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
   def self.assemble_with_multiple_ports(private_subnet_id, ports:, name: nil, algorithm: "round_robin",
     health_check_endpoint: DEFAULT_HEALTH_CHECK_ENDPOINT, health_check_interval: 30, health_check_timeout: 15,
     health_check_up_threshold: 3, health_check_down_threshold: 2, health_check_protocol: "http",
-    custom_hostname_prefix: nil, custom_hostname_dns_zone_id: nil, stack: LoadBalancer::Stack::DUAL)
+    custom_hostname_prefix: nil, custom_hostname_dns_zone_id: nil, stack: LoadBalancer::Stack::DUAL, cert_enabled: health_check_protocol == "https")
 
     unless (ps = PrivateSubnet[private_subnet_id])
       fail "Given subnet doesn't exist with the id #{private_subnet_id}"
@@ -36,7 +36,8 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
         health_check_timeout: health_check_timeout,
         health_check_up_threshold: health_check_up_threshold,
         health_check_down_threshold: health_check_down_threshold,
-        health_check_protocol: health_check_protocol
+        health_check_protocol: health_check_protocol,
+        cert_enabled:
       )
       ports.each { |src_port, dst_port| LoadBalancerPort.create(load_balancer_id: lb.id, src_port:, dst_port:) }
       Strand.create_with_id(lb.id, prog: "Vnet::LoadBalancerNexus", label: "wait")
@@ -46,10 +47,10 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
   def self.assemble(private_subnet_id, name: nil, algorithm: "round_robin",
     health_check_endpoint: DEFAULT_HEALTH_CHECK_ENDPOINT, health_check_interval: 30, health_check_timeout: 15,
     health_check_up_threshold: 3, health_check_down_threshold: 2, health_check_protocol: "http", src_port: nil, dst_port: nil,
-    custom_hostname_prefix: nil, custom_hostname_dns_zone_id: nil, stack: LoadBalancer::Stack::DUAL)
+    custom_hostname_prefix: nil, custom_hostname_dns_zone_id: nil, stack: LoadBalancer::Stack::DUAL, cert_enabled: health_check_protocol == "https")
 
     assemble_with_multiple_ports(private_subnet_id, name:, algorithm:, health_check_endpoint:, health_check_interval:, health_check_timeout:,
-      health_check_up_threshold:, health_check_down_threshold:, health_check_protocol:, ports: [[src_port, dst_port]], custom_hostname_prefix:, custom_hostname_dns_zone_id:, stack:)
+      health_check_up_threshold:, health_check_down_threshold:, health_check_protocol:, ports: [[src_port, dst_port]], custom_hostname_prefix:, custom_hostname_dns_zone_id:, stack:, cert_enabled:)
   end
 
   def before_run
@@ -83,12 +84,12 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
     return false unless load_balancer.dns_zone
 
     load_balancer.vms_to_dns.each do |vm|
-      if load_balancer.ipv4_enabled? && vm.ephemeral_net4
-        return true unless load_balancer.dns_zone.records_dataset.find { it.name == load_balancer.hostname + "." && it.type == "A" && it.data == vm.ephemeral_net4.to_s }
+      if load_balancer.ipv4_enabled? && vm.ip4_string
+        return true unless load_balancer.dns_zone.records_dataset.find { it.name == load_balancer.hostname + "." && it.type == "A" && it.data == vm.ip4_string }
       end
 
       if load_balancer.ipv6_enabled?
-        return true unless load_balancer.dns_zone.records_dataset.find { it.name == load_balancer.hostname + "." && it.type == "AAAA" && it.data == vm.ephemeral_net6.nth(2).to_s }
+        return true unless load_balancer.dns_zone.records_dataset.find { it.name == load_balancer.hostname + "." && it.type == "AAAA" && it.data == vm.ip6_string }
       end
     end
 
@@ -170,12 +171,12 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
 
     load_balancer.vms_to_dns.each do |vm|
       # Insert IPv4 record if stack is ipv4 or dual, and vm has IPv4
-      if load_balancer.ipv4_enabled? && vm.ephemeral_net4
+      if load_balancer.ipv4_enabled? && vm.ip4_string
         load_balancer.dns_zone&.insert_record(
           record_name: load_balancer.hostname,
           type: "A",
           ttl: 10,
-          data: vm.ephemeral_net4.to_s
+          data: vm.ip4_string
         )
       end
 
@@ -185,7 +186,7 @@ class Prog::Vnet::LoadBalancerNexus < Prog::Base
           record_name: load_balancer.hostname,
           type: "AAAA",
           ttl: 10,
-          data: vm.ephemeral_net6.nth(2).to_s
+          data: vm.ip6_string
         )
       end
     end

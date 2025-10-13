@@ -15,7 +15,7 @@ class Prog::DownloadBootImage < Prog::Base
   end
 
   def download_from_blob_storage?
-    image_name.start_with?("github", "postgres", "ai-", "kubernetes") || Config.production?
+    image_name.start_with?("github", "postgres", "ai-", "kubernetes", "gpu") || Config.production?
   end
 
   def default_boot_image_version(image_name)
@@ -35,13 +35,15 @@ class Prog::DownloadBootImage < Prog::Base
       elsif download_from_blob_storage?
         suffixes = {
           "github" => "raw",
+          "postgres" => "raw",
           "postgres16" => "raw",
           "postgres17" => "raw",
           "ubuntu" => "img",
           "almalinux" => "qcow2",
           "debian" => "raw",
           "ai" => "raw",
-          "kubernetes" => "raw"
+          "kubernetes" => "raw",
+          "gpu" => "raw"
         }
         image_family = image_name.split("-").first
         suffix = suffixes.fetch(image_family, nil)
@@ -96,8 +98,10 @@ class Prog::DownloadBootImage < Prog::Base
     ["github-ubuntu-2204", "arm64", "20250821.1.0"] => "1a0d8e97c9a497e001de036a9600e3bedddad43da0836b17c35ca3c91981bff0",
     ["github-gpu-ubuntu-2204", "x64", "20250724.1.0"] => "b091b99107682d3f8143dc2d75a50fe9e6e74140107dfdd552e29d2f73105db8",
     ["github-gpu-ubuntu-2204", "x64", "20250821.1.0"] => "96bf7e24b7a1dd86a6d2eb9222894060a847da5eb5f3f4e4ad3336f6ca151a18",
+    ["postgres-ubuntu-2204", "x64", "20251007.1.0"] => "df534a2c5a0fbf8af07d64d85ee6997848fbf8d4c57431100a1a1e270a4b5cc2",
     ["postgres16-ubuntu-2204", "x64", "20250425.1.1"] => "f59622da276d646ed2a1c03de546b0a7ec3fd48aeb27c0bfe2b8b8be98c062d2",
     ["postgres17-ubuntu-2204", "x64", "20250425.1.1"] => "ccb4bcd8197c2e230be3f485dd33f24a51041a4dc0408257e42b3fe9f1c0bfb3",
+    ["postgres-paradedb-ubuntu-2204", "x64", "20250803.1.0"] => "2ea5c3c54c3f4a4bcfbdb135c490c2ba7cc6c1a1848ef727e144fdefaf370be4",
     ["postgres16-paradedb-ubuntu-2204", "x64", "20250901.1.0"] => "5f42467fad1949a16732a860fe37db381f381e25281028935a9d1b4d79058d68",
     ["postgres17-paradedb-ubuntu-2204", "x64", "20250901.1.0"] => "671dd829c0c6682933bfcfbee702b9dde3476ea71d4145035953ad98e6cf24a1",
     ["postgres16-lantern-ubuntu-2204", "x64", "20250103.1.0"] => "bfb56867513045bc88396d529a3cc186dc44ba4d691acb51dbf45fc5a0eeb7e6",
@@ -121,7 +125,8 @@ class Prog::DownloadBootImage < Prog::Base
     ["ai-model-mistral-small-3", "x64", "20250217.1.0"] => "01ce8d1d0b7b0f717c51c26590234f4cb7971a9a5276de92b6cb4dc2c7a085e5",
     ["kubernetes-v1_32", "x64", "20250320.1.0"] => "369c7c869bba690771a1dcbbae52159defaa3fd3540f008ba6feea291e7a220a",
     ["kubernetes-v1_33", "x64", "20250506.1.0"] => "35ca03c19385227117fa6579f58c73a362970359fa9486024ca393b134a698d4",
-    ["kubernetes-v1_34", "x64", "20250828.1.0"] => "3a29122a3836109df78778df24899f864bc8beff7d92d86dc4ab8b99314f520c"
+    ["kubernetes-v1_34", "x64", "20250828.1.0"] => "3a29122a3836109df78778df24899f864bc8beff7d92d86dc4ab8b99314f520c",
+    ["gpu-ubuntu-noble", "x64", "20251011.1.0"] => "97c16eebacda508d4aa53bc97b4b97bf7b47b8dcc3d056b381c62a9b9077967a"
   }.freeze
   BOOT_IMAGE_SHA256.each_key(&:freeze)
 

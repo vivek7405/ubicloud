@@ -34,9 +34,11 @@ ubi lb (location/lb-name | lb-id) attach-vm (vm-name | vm-id)
 ubi lb location/lb-name create [options] (ps-name | ps-id) src-port dst-port
 ubi lb (location/lb-name | lb-id) destroy [options]
 ubi lb (location/lb-name | lb-id) detach-vm (vm-name | vm-id)
+ubi lb (location/lb-name | lb-id) disable-ssl-certificate
+ubi lb (location/lb-name | lb-id) enable-ssl-certificate
 ubi lb (location/lb-name | lb-id) rename new-name
 ubi lb (location/lb-name | lb-id) show [options]
-ubi lb (location/lb-name | lb-id) update algorithm src-port dst-port health-check-endpoint [(vm-name | vm-id) [...]]
+ubi lb (location/lb-name | lb-id) update algorithm src-port dst-port health-check-endpoint cert-enabled [(vm-name | vm-id) [...]]
 ubi pg command [...]
 ubi pg (location/pg-name | pg-id) [post-options] post-command [...]
 ubi pg list [options]
@@ -65,7 +67,9 @@ ubi pg (location/pg-name | pg-id) restore new-db-name restore-time
 ubi pg (location/pg-name | pg-id) set-maintenance-window start-hour
 ubi pg (location/pg-name | pg-id) show-config
 ubi pg (location/pg-name | pg-id) show-pgbouncer-config
+ubi pg (location/pg-name | pg-id) show-upgrade-status
 ubi pg (location/pg-name | pg-id) show [options]
+ubi pg (location/pg-name | pg-id) upgrade
 ubi ps command [...]
 ubi ps (location/ps-name | ps-id) post-command [...]
 ubi ps list [options]
@@ -77,7 +81,7 @@ ubi ps (location/ps-name | ps-id) rename new-name
 ubi ps (location/ps-name | ps-id) show [options]
 ubi sk command [...]
 ubi sk (sk-name | sk-id) post-command [...]
-ubi sk (sk-name | sk-id) list [options]
+ubi sk list [options]
 ubi sk sk-name create public-key
 ubi sk (sk-name | sk-id) destroy [options]
 ubi sk (sk-id | sk-name) rename new-name

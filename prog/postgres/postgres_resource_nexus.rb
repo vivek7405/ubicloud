@@ -11,7 +11,7 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
   def_delegators :postgres_resource, :servers, :representative_server
 
   def self.assemble(project_id:, location_id:, name:, target_vm_size:, target_storage_size_gib:,
-    version: PostgresResource::DEFAULT_VERSION, flavor: PostgresResource::Flavor::STANDARD,
+    target_version: PostgresResource::DEFAULT_VERSION, flavor: PostgresResource::Flavor::STANDARD,
     ha_type: PostgresResource::HaType::NONE, parent_id: nil, restore_target: nil, with_firewall_rules: true)
 
     unless Project[project_id]
@@ -23,14 +23,14 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
     end
 
     DB.transaction do
-      superuser_password, timeline_id, timeline_access, version = if parent_id.nil?
-        [SecureRandom.urlsafe_base64(15), Prog::Postgres::PostgresTimelineNexus.assemble(location_id: location.id).id, "push", version]
+      superuser_password, timeline_id, timeline_access, target_version = if parent_id.nil?
+        [SecureRandom.urlsafe_base64(15), Prog::Postgres::PostgresTimelineNexus.assemble(location_id: location.id).id, "push", target_version]
       else
         unless (parent = PostgresResource[parent_id])
           fail "No existing parent"
         end
 
-        if version && version != parent.version
+        if target_version && target_version != parent.version
           fail Validation::ValidationFailed.new({version: "Version must be the same as the parent"})
         end
 
@@ -50,7 +50,7 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
       postgres_resource = PostgresResource.create(
         project_id: project_id, location_id: location.id, name: name,
         target_vm_size: target_vm_size, target_storage_size_gib: target_storage_size_gib,
-        superuser_password: superuser_password, ha_type: ha_type, version: version, flavor: flavor,
+        superuser_password: superuser_password, ha_type: ha_type, target_version: target_version, flavor: flavor,
         parent_id: parent_id, restore_target: restore_target, hostname_version: "v2"
       )
 
@@ -101,7 +101,7 @@ class Prog::Postgres::PostgresResourceNexus < Prog::Base
   label def refresh_dns_record
     decr_refresh_dns_record
 
-    type, data = postgres_resource.location.aws? ? ["CNAME", representative_server.vm.aws_instance.ipv4_dns_name + "."] : ["A", representative_server.vm.ephemeral_net4.to_s]
+    type, data = postgres_resource.location.aws? ? ["CNAME", representative_server.vm.aws_instance.ipv4_dns_name + "."] : ["A", representative_server.vm.ip4_string]
 
     if postgres_resource.dns_zone
       postgres_resource.dns_zone.delete_record(record_name: postgres_resource.hostname)

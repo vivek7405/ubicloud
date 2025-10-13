@@ -6,8 +6,8 @@ module Option
   ai_models = YAML.load_file("config/ai_models.yml")
   AI_MODELS = ai_models.select { it["enabled"] }.freeze
 
-  def self.locations(only_visible: true, feature_flags: [])
-    Location.where(project_id: nil).all.select { |pl| !only_visible || (pl.visible || feature_flags.include?("location_#{pl.name.tr("-", "_")}")) }
+  def self.locations(only_visible: true, feature_flags: {})
+    Location.where(project_id: nil).all.select { |pl| !only_visible || (pl.visible || feature_flags["visible_locations"]&.include?(pl.name)) }
   end
 
   def self.kubernetes_locations
@@ -38,19 +38,22 @@ module Option
     [1, vcpus / 2].max
   end
 
-  AWS_FAMILY_OPTIONS = ["c6gd", "m6id", "m6gd", "m7a", "m8gd", "i8g"].freeze
+  AWS_FAMILY_OPTIONS = ["c6gd", "m6a", "m6id", "m6gd", "m7a", "m7i", "m8gd", "i8g"].freeze
   non_storage_optimized_vm_storage_size_options = {2 => ["118"], 4 => ["237"], 8 => ["474"], 16 => ["950"], 32 => ["1900"], 64 => ["3800"]}
   AWS_STORAGE_SIZE_OPTIONS = {
     "c6gd" => non_storage_optimized_vm_storage_size_options,
+    "m6a" => non_storage_optimized_vm_storage_size_options,
     "m6id" => non_storage_optimized_vm_storage_size_options,
     "m6gd" => non_storage_optimized_vm_storage_size_options,
     "m7a" => non_storage_optimized_vm_storage_size_options,
+    "m7i" => non_storage_optimized_vm_storage_size_options,
     "m8gd" => non_storage_optimized_vm_storage_size_options,
     "i8g" => {2 => ["468"], 4 => ["937"], 8 => ["1875"], 16 => ["3750"], 32 => ["7500"], 64 => ["15000"]}
   }.freeze
 
   BootImage = Struct.new(:name, :display_name)
   BootImages = [
+    ["gpu-ubuntu-noble", "Ubuntu 24.04 for GPU VMs"],
     ["ubuntu-noble", "Ubuntu Noble 24.04 LTS"],
     ["ubuntu-jammy", "Ubuntu Jammy 22.04 LTS"],
     ["debian-12", "Debian 12"],
@@ -98,7 +101,7 @@ module Option
   }).concat(AWS_FAMILY_OPTIONS.product([2, 4, 8, 16, 32, 64]).map { |family, vcpu|
     memory_coefficient = (family == "c6gd") ? 2 : 4
 
-    arch = ["m6id", "m7a"].include?(family) ? "x64" : "arm64"
+    arch = ["m6a", "m6id", "m7a", "m7i"].include?(family) ? "x64" : "arm64"
     VmSize.new(aws_instance_type_name(family, vcpu), family, vcpu, vcpu * 100, 0, vcpu * memory_coefficient, AWS_STORAGE_SIZE_OPTIONS[family][vcpu], NO_IO_LIMITS, nil, false, arch)
   }).freeze
 
