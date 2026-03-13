@@ -117,6 +117,52 @@ Then go to http://localhost:3000 to provision VMs.
 
 ---
 
+## Custom Boot Images
+
+Custom boot images can be added for use with VMs. The sandbox-platform project uses a custom `sandbox-noble` image.
+
+### Adding a custom boot image
+
+1. **Add to allowed list**: Edit `lib/option.rb` and add an entry to `Option::BootImages`:
+   ```ruby
+   ["sandbox-noble", "Sandbox Ubuntu Noble 24.04 (dev tools pre-installed)"],
+   ```
+   Then restart the app container: `docker restart ubicloud-app`
+
+2. **Register for download**: The image must be hosted on an HTTP server accessible from the Hetzner host:
+   ```ruby
+   docker exec ubicloud-app ruby -e "
+     require_relative 'loader'
+     host = VmHost.first
+     host.download_boot_image('sandbox-noble', version: '1.0.0',
+       custom_url: 'http://<server-ip>/images/sandbox-noble-1.0.0.qcow2')
+   "
+   ```
+
+3. **Wait for activation**: Ubicloud downloads, converts to `.raw`, and sets `activated_at`. Check status:
+   ```ruby
+   docker exec ubicloud-app ruby -e "
+     require_relative 'loader'
+     bi = VmHost.first.boot_images_dataset.where(name: 'sandbox-noble').first
+     puts \"Activated: #{bi.activated_at}, Size: #{bi.size_gib}GB\"
+   "
+   ```
+
+### Image format requirements
+
+- Supported: `.raw`, `.qcow2`, `.img`, `.vhd` (all converted to `.raw`)
+- Cloud-init must be pre-installed (Ubicloud injects SSH keys, users, networking via cloud-init)
+- Images stored at `/var/storage/images/{name}-{version}.raw` on the host
+- Each VM gets its own copy via `cp --reflink=auto`
+
+### Current custom images
+
+| Name | Version | Source | SHA256 |
+|------|---------|--------|--------|
+| `sandbox-noble` | `1.0.0` | `http://144.76.134.98/images/sandbox-noble-1.0.0.qcow2` | `b2269bb9...7fdd7e6e` |
+
+---
+
 ## Common Gotchas
 
 | Issue | Cause | Fix |
