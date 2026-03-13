@@ -119,6 +119,8 @@ Then go to http://localhost:3000 to provision VMs.
 
 ## Custom Boot Images
 
+> **Branch**: `custom-boot-image` (created from the `local` branch)
+
 Custom boot images can be added for use with VMs. The sandbox-platform project uses a custom `sandbox-noble` image.
 
 ### Adding a custom boot image
