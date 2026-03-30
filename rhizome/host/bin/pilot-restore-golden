@@ -1,0 +1,107 @@
+#!/bin/bash
+# Restore a VM from a golden CH snapshot into a different VM's infrastructure.
+# Modifies the snapshot config to match the target VM's TAP/socket paths,
+# sets the TAP MAC to match the snapshot's guest MAC, then starts CH with --restore.
+#
+# Usage: pilot-restore-golden <target_inhost_name> <golden_snapshot_dir>
+set -e
+
+TARGET_VM="$1"
+GOLDEN_SNAP="$2"
+CH="/opt/cloud-hypervisor/v46.0/cloud-hypervisor"
+
+# Create a temporary modified snapshot config
+WORK_DIR="/tmp/pilot-restore-$$"
+mkdir -p "$WORK_DIR"
+
+# Read original golden snapshot config and modify for target VM
+python3 << PYEOF
+import json, sys, subprocess, re
+
+with open("$GOLDEN_SNAP/config.json") as f:
+    cfg = json.load(f)
+
+# Get the original VM name from the snapshot paths
+original_vm = None
+for disk in cfg.get("disks", []):
+    sock = disk.get("vhost_socket", "")
+    m = re.search(r"/var/storage/([^/]+)/", sock)
+    if m:
+        original_vm = m.group(1)
+        break
+
+if not original_vm:
+    # Try from serial log path
+    serial = cfg.get("serial", {}).get("file", "")
+    m = re.search(r"/vm/([^/]+)/", serial)
+    if m:
+        original_vm = m.group(1)
+
+if not original_vm:
+    print("ERROR: Cannot determine original VM name from snapshot config", file=sys.stderr)
+    sys.exit(1)
+
+target_vm = "$TARGET_VM"
+
+# Get the target VM's TAP device name
+tap_output = subprocess.check_output(
+    ["sudo", "ip", "netns", "exec", target_vm, "ip", "-o", "link", "show"],
+    text=True
+)
+target_tap = None
+for line in tap_output.strip().split("\n"):
+    parts = line.split(": ")
+    if len(parts) >= 2:
+        dev_name = parts[1].split("@")[0]
+        if dev_name not in ("lo",) and "veth" not in dev_name:
+            target_tap = dev_name
+            break
+
+if not target_tap:
+    print("ERROR: Cannot find TAP device for " + target_vm, file=sys.stderr)
+    sys.exit(1)
+
+# Get the guest MAC from the snapshot (what the guest OS expects)
+guest_mac = cfg["net"][0]["mac"]
+
+# Set the target TAP's MAC to match the guest MAC BEFORE restore
+subprocess.run(
+    ["sudo", "ip", "netns", "exec", target_vm, "ip", "link", "set", target_tap, "address", guest_mac],
+    check=True
+)
+
+# Replace all paths: original_vm → target_vm
+raw = json.dumps(cfg)
+raw = raw.replace(original_vm, target_vm)
+cfg = json.loads(raw)
+
+# Also update the TAP name
+cfg["net"][0]["tap"] = target_tap
+
+with open("$WORK_DIR/config.json", "w") as f:
+    json.dump(cfg, f)
+
+print(f"OK original={original_vm} target={target_vm} tap={target_tap} mac={guest_mac}")
+PYEOF
+
+# Symlink memory and state files (no need to copy — read-only)
+ln -sf "$GOLDEN_SNAP/memory-ranges" "$WORK_DIR/memory-ranges"
+ln -sf "$GOLDEN_SNAP/state.json" "$WORK_DIR/state.json"
+
+# Create systemd override for --restore
+ODIR="/etc/systemd/system/$TARGET_VM.service.d"
+SOCK="/vm/$TARGET_VM/ch-api.sock"
+
+mkdir -p "$ODIR"
+printf '[Service]\nExecStart=\nExecStart=%s -v --api-socket path=%s --restore source_url=file://%s\nAmbientCapabilities=CAP_NET_ADMIN\n' \
+  "$CH" "$SOCK" "$WORK_DIR" > "$ODIR/restore.conf"
+
+systemctl daemon-reload
+systemctl start "$TARGET_VM"
+
+# Clean up override (so normal restarts work)
+rm -rf "$ODIR"
+systemctl daemon-reload
+
+# Clean up work dir (snapshot is loaded into memory, files no longer needed)
+rm -rf "$WORK_DIR"

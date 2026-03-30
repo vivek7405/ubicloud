@@ -1,22 +1,10 @@
 #!/bin/bash
-# Restore a VM from a CH snapshot. Called by pilot-platform via SSH.
-# Usage: pilot-restore <inhost_name> <snapshot_dir>
+# Resume a paused VM. Called by pilot-platform via SSH.
+# Usage: pilot-restore <inhost_name>
 set -e
 
 VM="$1"
-SNAP="$2"
+CHR="/opt/cloud-hypervisor/v46.0/ch-remote"
 SOCK="/vm/$VM/ch-api.sock"
-CH="/opt/cloud-hypervisor/v46.0/cloud-hypervisor"
-ODIR="/etc/systemd/system/$VM.service.d"
 
-# Create systemd override to start CH in restore mode
-mkdir -p "$ODIR"
-printf '[Service]\nExecStart=\nExecStart=%s -v --api-socket path=%s --restore source_url=file://%s\n' "$CH" "$SOCK" "$SNAP" > "$ODIR/restore.conf"
-systemctl daemon-reload
-
-# Start VM from snapshot (CH v46 auto-resumes)
-systemctl start "$VM"
-
-# Clean up override so normal restarts work
-rm -rf "$ODIR"
-systemctl daemon-reload
+$CHR --api-socket "$SOCK" resume
