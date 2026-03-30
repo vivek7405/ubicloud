@@ -64,63 +64,6 @@ class Clover
         end
       end
 
-      r.post "stop" do
-        authorize("Vm:edit", vm)
-
-        DB.transaction do
-          vm.incr_stop
-          audit_log(vm, "stop")
-        end
-
-        if api?
-          Serializers::Vm.serialize(vm, {detailed: true})
-        else
-          flash["notice"] = "'#{vm.name}' will be stopped"
-          r.redirect vm, "/settings"
-        end
-      end
-
-      r.post "checkpoint" do
-        authorize("Vm:edit", vm)
-        body = JSON.parse(r.body.read) rescue {}
-        pilot_id = body["pilot_id"]
-        checkpoint_id = body["checkpoint_id"]
-
-        source = "/mnt/juicefs/vms/#{vm.inhost_name}/0/disk.raw"
-        dest_dir = "/mnt/juicefs/checkpoints/#{pilot_id}/#{checkpoint_id}"
-        dest = "#{dest_dir}/disk.raw"
-
-        vm.vm_host.sshable.cmd("sudo mkdir -p #{dest_dir.shellescape} && sudo juicefs clone #{source.shellescape} #{dest.shellescape}")
-
-        if api?
-          {"checkpoint_id" => checkpoint_id, "status" => "created"}
-        else
-          204
-        end
-      end
-
-      r.post "restore" do
-        authorize("Vm:edit", vm)
-        body = JSON.parse(r.body.read) rescue {}
-        pilot_id = body["pilot_id"]
-        checkpoint_id = body["checkpoint_id"]
-
-        source = "/mnt/juicefs/checkpoints/#{pilot_id}/#{checkpoint_id}/disk.raw"
-        dest = "/mnt/juicefs/vms/#{vm.inhost_name}/0/disk.raw"
-
-        host = vm.vm_host
-        host.sshable.cmd("sudo systemctl stop #{vm.inhost_name}")
-        host.sshable.cmd("sudo rm -f #{dest.shellescape} && sudo juicefs clone #{source.shellescape} #{dest.shellescape}")
-        host.sshable.cmd("sudo truncate -s $(stat -c%s #{source.shellescape}) #{dest.shellescape}")
-        host.sshable.cmd("sudo systemctl start #{vm.inhost_name}")
-
-        if api?
-          {"checkpoint_id" => checkpoint_id, "status" => "restored"}
-        else
-          204
-        end
-      end
-
       r.rename vm, perm: "Vm:edit", serializer: Serializers::Vm, template_prefix: "vm"
 
       r.show_object(vm, actions: %w[overview networking settings], perm: "Vm:view", template: "vm/show")
