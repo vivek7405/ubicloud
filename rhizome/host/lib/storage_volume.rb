@@ -41,6 +41,10 @@ class StorageVolume
     @cpus = params["cpus"]
   end
 
+  def juicefs_device?
+    @device == "juicefs"
+  end
+
   def vp
     @vp ||= VmPath.new(@vm_name)
   end
@@ -408,12 +412,26 @@ class StorageVolume
   end
 
   def unencrypted_image_copy
-    q_image_path = @image_path.shellescape
     q_disk_file = disk_file.shellescape
 
-    r "cp --reflink=auto #{q_image_path} #{q_disk_file}"
-    r "truncate -s #{@disk_size_gib}G #{q_disk_file}"
+    if juicefs_device?
+      # Prefer golden snapshot (fully provisioned VM disk) over raw boot image
+      image_basename = File.basename(@image_path, ".raw")
+      golden = "/mnt/juicefs/golden/#{image_basename}/disk.raw"
+      juicefs_image = "/mnt/juicefs/images/#{File.basename(@image_path)}"
 
+      if File.exist?(golden)
+        r "juicefs clone #{golden.shellescape} #{q_disk_file}"
+      elsif File.exist?(juicefs_image)
+        r "juicefs clone #{juicefs_image.shellescape} #{q_disk_file}"
+      else
+        fail "No golden snapshot or boot image on JuiceFS for #{image_basename}"
+      end
+    else
+      r "cp --reflink=auto #{@image_path.shellescape} #{q_disk_file}"
+    end
+
+    r "truncate -s #{@disk_size_gib}G #{q_disk_file}"
     set_disk_file_permissions
   end
 

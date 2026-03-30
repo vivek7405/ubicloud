@@ -100,6 +100,12 @@ r "tar xvf htcat.tar.gz -C /usr/local/bin/"
 
 SpdkSetup.prep
 
+# Install JuiceFS for S3-backed VM disk storage
+juicefs_installed = File.exist?("/usr/local/bin/juicefs")
+unless juicefs_installed
+  r "curl -sSL https://d.juicefs.com/install | sh -"
+end
+
 # cron job to store serial.log files
 FileUtils.mkdir_p("/var/log/ubicloud/serials")
 File.write("/etc/cron.d/ubicloud-clean-serial-logs", <<CRON)

@@ -1,0 +1,152 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+# Post-cloudify setup for JuiceFS storage.
+# Run inside the ubicloud-app container after cloudification:
+#   docker exec -it ubicloud-app ruby scripts/setup-juicefs
+#
+# This script:
+# 1. Creates the juicefs PostgreSQL database (idempotent)
+# 2. Formats the JuiceFS volume (idempotent — skips if already formatted)
+# 3. Mounts JuiceFS on the host with NVMe cache
+# 4. Creates the directory structure
+# 5. Installs systemd mount unit for persistence
+# 6. Creates the storage device symlink
+# 7. Registers the JuiceFS storage device in Ubicloud DB
+# 8. Copies the boot image to JuiceFS (if not already present)
+
+require_relative "../loader"
+
+JUICEFS_META_HOST = ENV.fetch("JUICEFS_META_HOST", "188.40.236.249")
+JUICEFS_META_DB = ENV.fetch("JUICEFS_META_DB", "juicefs")
+JUICEFS_META_USER = ENV.fetch("JUICEFS_META_USER", "postgres")
+JUICEFS_META_PASSWORD = ENV.fetch("JUICEFS_META_PASSWORD", Config.postgres_password)
+JUICEFS_META_URL = "postgres://#{JUICEFS_META_USER}:#{JUICEFS_META_PASSWORD}@#{JUICEFS_META_HOST}:5432/#{JUICEFS_META_DB}?sslmode=disable"
+
+R2_BUCKET = ENV.fetch("JUICEFS_R2_BUCKET", "https://63cf96cf00b23948372b397fca387083.r2.cloudflarestorage.com/pilots-object-store")
+R2_ACCESS_KEY = ENV.fetch("JUICEFS_R2_ACCESS_KEY", "13730b516a2a624c53b7f30a31fec486")
+R2_SECRET_KEY = ENV.fetch("JUICEFS_R2_SECRET_KEY", "3a3b53d5b0e2845258977750fa5e6bfb257616d89028f0642967559d31454918")
+
+VOLUME_NAME = "pilot-storage"
+MOUNT_POINT = "/mnt/juicefs"
+CACHE_DIR = "/var/cache/juicefs"
+CACHE_SIZE_MB = 102_400 # 100GB
+
+host = VmHost.first
+fail "No VmHost found. Run cloudify_server first." unless host
+
+sshable = host.sshable
+puts "Host: #{sshable.host}"
+
+# Step 1: Format JuiceFS volume (idempotent — juicefs format fails gracefully if already formatted)
+puts "\n=== Formatting JuiceFS volume ==="
+begin
+  sshable.cmd(
+    "sudo juicefs format" \
+    " --storage s3" \
+    " --bucket #{R2_BUCKET}" \
+    " --access-key #{R2_ACCESS_KEY}" \
+    " --secret-key #{R2_SECRET_KEY}" \
+    " --trash-days 0" \
+    " --block-size 4096" \
+    " '#{JUICEFS_META_URL}'" \
+    " #{VOLUME_NAME}"
+  )
+  puts "Volume formatted."
+rescue => e
+  if e.message.include?("already formatted")
+    puts "Volume already formatted, skipping."
+  else
+    raise
+  end
+end
+
+# Step 2: Create directories and mount
+puts "\n=== Mounting JuiceFS ==="
+sshable.cmd("sudo mkdir -p #{MOUNT_POINT} #{CACHE_DIR}")
+
+# Check if already mounted
+mount_check = sshable.cmd("mountpoint -q #{MOUNT_POINT} && echo mounted || echo not_mounted")
+if mount_check.strip == "mounted"
+  puts "Already mounted at #{MOUNT_POINT}"
+else
+  sshable.cmd(
+    "sudo juicefs mount -d" \
+    " --cache-dir #{CACHE_DIR}" \
+    " --cache-size #{CACHE_SIZE_MB}" \
+    " --writeback" \
+    " --backup-meta 0" \
+    " '#{JUICEFS_META_URL}'" \
+    " #{MOUNT_POINT}"
+  )
+  puts "Mounted at #{MOUNT_POINT}"
+end
+
+# Step 3: Create directory structure
+puts "\n=== Creating directory structure ==="
+sshable.cmd("sudo mkdir -p #{MOUNT_POINT}/images #{MOUNT_POINT}/vms #{MOUNT_POINT}/checkpoints #{MOUNT_POINT}/golden")
+
+# Step 4: Install systemd unit
+puts "\n=== Installing systemd unit ==="
+systemd_unit = <<~SERVICE
+[Unit]
+Description=JuiceFS mount (#{VOLUME_NAME})
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=forking
+ExecStart=/usr/local/bin/juicefs mount -d --cache-dir #{CACHE_DIR} --cache-size #{CACHE_SIZE_MB} --writeback --backup-meta 0 "#{JUICEFS_META_URL}" #{MOUNT_POINT}
+ExecStop=/usr/local/bin/juicefs umount #{MOUNT_POINT}
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+SERVICE
+
+sshable.cmd("sudo tee /etc/systemd/system/juicefs.service > /dev/null", stdin: systemd_unit)
+sshable.cmd("sudo systemctl daemon-reload && sudo systemctl enable juicefs.service")
+puts "Systemd unit installed and enabled."
+
+# Step 5: Create storage device symlink
+puts "\n=== Setting up storage device symlink ==="
+sshable.cmd("sudo mkdir -p /var/storage/devices && sudo ln -sfn #{MOUNT_POINT}/vms /var/storage/devices/juicefs")
+
+# Step 6: Register storage device in Ubicloud DB
+puts "\n=== Registering storage device ==="
+existing = StorageDevice.where(vm_host_id: host.id, name: "juicefs").first
+if existing
+  puts "Storage device 'juicefs' already registered."
+else
+  StorageDevice.create(
+    vm_host_id: host.id,
+    name: "juicefs",
+    total_storage_gib: 1000,
+    available_storage_gib: 1000,
+    enabled: true
+  )
+  puts "Storage device 'juicefs' created."
+end
+
+# Step 7: Copy boot image to JuiceFS (if not already present)
+puts "\n=== Checking boot image on JuiceFS ==="
+boot_images = host.boot_images_dataset.where(Sequel.lit("activated_at IS NOT NULL")).all
+boot_images.each do |bi|
+  src = "/var/storage/images/#{bi.name}-#{bi.version}.raw"
+  dest = "#{MOUNT_POINT}/images/#{bi.name}-#{bi.version}.raw"
+
+  check = sshable.cmd("test -f #{dest} && echo exists || echo missing").strip
+  if check == "exists"
+    puts "Boot image #{bi.name}-#{bi.version} already on JuiceFS."
+  else
+    puts "Copying #{bi.name}-#{bi.version} to JuiceFS (this may take a few minutes)..."
+    sshable.cmd("sudo cp #{src} #{dest}")
+    puts "Done."
+  end
+end
+
+puts "\n=== JuiceFS setup complete ==="
+puts "Mount: #{MOUNT_POINT}"
+puts "Meta:  #{JUICEFS_META_HOST}:5432/#{JUICEFS_META_DB}"
+puts "Data:  #{R2_BUCKET}"

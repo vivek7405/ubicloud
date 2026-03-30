@@ -665,6 +665,9 @@ DNSMASQ_SERVICE
     vhost_user_block_after = vhost_user_block_services.map { |s| "After=#{s}" }.join("\n")
     vhost_user_block_requires = vhost_user_block_services.map { |s| "Requires=#{s}" }.join("\n")
 
+    juicefs_after = storage_volumes.any?(&:juicefs_device?) ? "After=juicefs.service" : ""
+    juicefs_requires = storage_volumes.any?(&:juicefs_device?) ? "Requires=juicefs.service" : ""
+
     # PCI passthrough requires locking guest memory. Set MEMLOCK to vm memory
     # with ~25% headroom to cover overhead and prevent QEMU startup failures.
     limit_memlock = pci_devices.empty? ? "" : "LimitMEMLOCK=#{(mem_gib * 1.25 * 1073741824).to_i}"
@@ -676,9 +679,11 @@ DNSMASQ_SERVICE
       After=network.target
       #{spdk_after}
       #{vhost_user_block_after}
+      #{juicefs_after}
       After=#{@vm_name}-dnsmasq.service
       #{spdk_requires}
       #{vhost_user_block_requires}
+      #{juicefs_requires}
       Wants=#{@vm_name}-dnsmasq.service
     VM_HEADER
 

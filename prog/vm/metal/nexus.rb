@@ -299,6 +299,10 @@ class Prog::Vm::Metal::Nexus < Prog::Base
     end
     decr_stop
 
+    when_restart_set? do
+      hop_restart
+    end
+
     nap 60 * 60
   end
 
